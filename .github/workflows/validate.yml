@@ -1,0 +1,25 @@
+name: Validate userscript
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: JavaScript syntax check
+        run: node --check tideborn-faction-command.user.js
+      - name: Validate release metadata
+        run: node scripts/check-release.mjs
+      - name: Verify generated meta file is current
+        run: |
+          cp tideborn-faction-command.meta.js /tmp/tfc-meta.js
+          node scripts/build-meta.mjs
+          diff -u /tmp/tfc-meta.js tideborn-faction-command.meta.js
