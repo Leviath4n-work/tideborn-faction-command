@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.15.2
+
+- Fixed the leadership overview banner reserving 520 pixels of height when the Command Center switches to a column layout on phones or narrow panels. The banner now sizes to its content while keeping the refresh control and status guide visible.
+
 ## 0.15.1
 
 - Added GitHub-backed automatic update metadata.

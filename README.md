@@ -23,7 +23,7 @@ Keeping the filename stable means TornPDA can continue updating from the same so
 
 ## Current version
 
-**v0.15.1**
+**v0.15.2**
 
 TFC also includes an update panel in **Settings → GitHub auto-update** where you can check the latest repository version manually.
 

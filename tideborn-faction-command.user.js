@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tideborn Faction Command
 // @namespace    tideborn.legion
-// @version      0.15.1
+// @version      0.15.2
 // @description  Modular faction leadership command center for Torn with member management, war, chain, OC, recruitment, armory, finance, analytics, and GitHub auto-updates.
 // @author       Leviath4n / Tideborn Legion
 // @homepageURL  https://github.com/Leviath4n-work/tideborn-faction-command
@@ -26,7 +26,7 @@
         id: 'tideborn-faction-command',
         name: 'Tideborn Faction Command',
         short: 'TFC',
-        version: '0.15.1',
+        version: '0.15.2',
         apiBase: 'https://api.torn.com/v2',
         apiComment: 'TidebornFC',
         storagePrefix: 'tfc:',
@@ -807,7 +807,8 @@
             .tfc-oc-item-ready { color:var(--tfc-good); }
             .tfc-oc-item-missing { color:var(--tfc-bad); font-weight:900; }
             .tfc-command-hero { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:15px 16px; border:1px solid rgba(42,169,201,.28); background:linear-gradient(135deg,rgba(42,169,201,.11),rgba(23,30,39,.92)); border-radius:12px; min-width:0; }
-            .tfc-command-hero > div:first-child { flex:1 1 520px; min-width:0; }
+            /* Auto basis stays content-sized when responsive rules change the row to a column. */
+            .tfc-command-hero > div:first-child { flex:1 1 auto; min-width:0; }
             .tfc-command-hero > .tfc-toolbar { flex:0 1 auto; justify-content:flex-end; }
             .tfc-command-hero h3 { margin:0 0 8px; color:#fff; font-size:18px; line-height:1.18; overflow-wrap:anywhere; }
             .tfc-command-hero p { margin:0; color:var(--tfc-muted); font-size:10px; line-height:1.55; overflow-wrap:anywhere; }
