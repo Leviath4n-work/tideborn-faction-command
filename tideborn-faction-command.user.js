@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tideborn Faction Command
 // @namespace    tideborn.legion
-// @version      0.15.2
+// @version      0.15.3
 // @description  Modular faction leadership command center for Torn with member management, war, chain, OC, recruitment, armory, finance, analytics, and GitHub auto-updates.
 // @author       Leviath4n / Tideborn Legion
 // @homepageURL  https://github.com/Leviath4n-work/tideborn-faction-command
@@ -26,7 +26,7 @@
         id: 'tideborn-faction-command',
         name: 'Tideborn Faction Command',
         short: 'TFC',
-        version: '0.15.2',
+        version: '0.15.3',
         apiBase: 'https://api.torn.com/v2',
         apiComment: 'TidebornFC',
         storagePrefix: 'tfc:',
@@ -125,6 +125,8 @@
         warAttackError: '',
         warAttackLastFetchedAt: 0,
         warAttackSyncing: false,
+        warReconcileId: null,
+        warReconcileError: '',
         warAttackCache: null,
         warActivityHistory: {},
         warRecentReleases: {},
@@ -2483,6 +2485,7 @@
         const now = nowSec();
         const existing = state.warActivityHistory[warId] || {
             warId,
+            ownFactionId: Number(state.faction?.id || 0),
             opponentId: Number(state.warOpponent.id),
             opponentName: state.warOpponent.name || '',
             sampleCount: 0,
@@ -2575,6 +2578,188 @@
                 warlord: Number(a.modifiers.warlord || 0),
             } : null,
         };
+    }
+
+
+    function normalizeRankedWarReport(data, fallbackSummary = {}) {
+        const report = data?.ranked_war_report ?? data?.rankedwarreport ?? data?.report ?? data ?? {};
+        const war = report?.war || {};
+        const rawFactions = report?.factions || [];
+        const factions = Array.isArray(rawFactions)
+            ? rawFactions.map(f => ({ ...f, id: Number(f?.id || f?.faction_id || 0) }))
+            : Object.entries(rawFactions || {}).map(([id, f]) => ({ ...(f || {}), id: Number(f?.id || f?.faction_id || id || 0) }));
+
+        const ownId = Number(state.faction?.id || 0);
+        let ours = factions.find(f => Number(f.id) === ownId) || null;
+        let enemy = factions.find(f => Number(f.id) !== Number(ours?.id || ownId)) || null;
+
+        if (!ours && factions.length === 2) {
+            const fallbackEnemy = Number(fallbackSummary?.opponentId || 0);
+            enemy = factions.find(f => Number(f.id) === fallbackEnemy) || factions[1] || null;
+            ours = factions.find(f => Number(f.id) !== Number(enemy?.id || 0)) || factions[0] || null;
+        }
+
+        return {
+            report,
+            war,
+            ours,
+            enemy,
+            start: Number(war?.start || report?.start || fallbackSummary?.start || 0),
+            end: Number(war?.end || report?.end || fallbackSummary?.end || 0),
+            winner: Number(war?.winner || report?.winner || 0),
+        };
+    }
+
+    async function fetchHistoricalWarAttacks(summary, force = true) {
+        const start = Number(summary?.start || 0);
+        const end = Number(summary?.end || 0);
+        const enemyId = Number(summary?.opponentId || 0);
+        const ownId = Number(summary?.ownFactionId || state.faction?.id || 0);
+        if (!start) throw new Error('Stored war has no start time.');
+        if (!end) throw new Error('Torn has not published a final end time for this war yet.');
+        if (!enemyId) throw new Error('Stored war has no opponent faction ID.');
+        if (!ownId) throw new Error('Could not identify your faction.');
+
+        const from = Math.max(0, start - 5);
+        let to = end + 5;
+        let page = 0;
+        const maxPages = 100;
+        const attacks = new Map();
+
+        while (page < maxPages) {
+            const data = await api('/faction/attacks', {
+                filters: 'outgoing',
+                limit: 100,
+                sort: 'DESC',
+                from,
+                to,
+            }, { force });
+
+            const rows = Array.isArray(data?.attacks) ? data.attacks : [];
+            for (const a of rows) {
+                const ended = Number(a?.ended || 0);
+                const attackerFaction = Number(a?.attacker?.faction?.id || 0);
+                const defenderFaction = Number(a?.defender?.faction?.id || 0);
+                if (!a?.is_ranked_war) continue;
+                if (attackerFaction !== ownId || defenderFaction !== enemyId) continue;
+                if (ended < start - 5 || ended > end + 5) continue;
+                attacks.set(String(a.id), compactWarAttack(a));
+            }
+
+            if (rows.length < 100) break;
+            const endedValues = rows.map(a => Number(a?.ended || 0)).filter(v => Number.isFinite(v) && v > 0);
+            if (!endedValues.length) break;
+            const oldest = Math.min(...endedValues);
+            if (oldest <= from) break;
+            const nextTo = oldest - 1;
+            if (nextTo >= to) break;
+            to = nextTo;
+            page++;
+        }
+
+        if (page >= maxPages) throw new Error('Historical attack refresh hit the 10,000-record safety limit.');
+        return [...attacks.values()].sort((a, b) => Number(b.ended || 0) - Number(a.ended || 0));
+    }
+
+    async function reconcileSavedWar(warId, silent = false) {
+        const id = String(warId || '');
+        if (!id || state.warReconcileId) return false;
+        const original = state.warHistory?.[id];
+        if (!original) {
+            if (!silent) toast('Stored war report not found', 'error');
+            return false;
+        }
+
+        state.warReconcileId = id;
+        state.warReconcileError = '';
+        if (state.open && state.activeTab === 'payout') render();
+
+        try {
+            if (!state.faction?.id) await refreshRoster(false);
+            // Public ranked-war report provides the authoritative final timestamps and scores.
+            const reportData = await api(`/faction/${encodeURIComponent(id)}/rankedwarreport`, {}, { force: true });
+            const normalized = normalizeRankedWarReport(reportData, original);
+            const enemy = normalized.enemy || {};
+            const ours = normalized.ours || {};
+            const updated = {
+                ...original,
+                ownFactionId: Number(ours.id || original.ownFactionId || state.faction?.id || 0),
+                opponentId: Number(enemy.id || original.opponentId || 0),
+                opponentName: enemy.name || original.opponentName || '',
+                start: Number(normalized.start || original.start || 0),
+                end: Number(normalized.end || original.end || 0),
+                winner: Number(normalized.winner || original.winner || 0),
+                ourScore: Number(ours.score ?? original.ourScore ?? 0),
+                enemyScore: Number(enemy.score ?? original.enemyScore ?? 0),
+                officialSuccessfulAttacks: Number(ours.attacks ?? original.officialSuccessfulAttacks ?? 0),
+                reportRefreshedAt: nowSec(),
+                updatedAt: Date.now(),
+            };
+            state.warHistory[id] = updated;
+            await Store.set('warHistory', state.warHistory);
+
+            const allowed = await assessWarAttackAccess(true);
+            if (!allowed) throw new Error(state.warAttackError || 'Your API key cannot read faction attack logs.');
+
+            const attacks = await fetchHistoricalWarAttacks(updated, true);
+            const performance = buildWarPerformanceRows(attacks, false).filter(x => x.attempts > 0);
+            const participants = performance.map(row => ({
+                id: row.id,
+                name: row.name,
+                attempts: Number(row.attempts || 0),
+                hits: Number(row.scoringHits || 0),
+                assists: Number(row.assists || 0),
+                losses: Number(row.losses || 0),
+                respect: Math.round(Number(row.respect || 0) * 1000) / 1000,
+            }));
+            const scoringHits = performance.reduce((sum, row) => sum + Number(row.scoringHits || 0), 0);
+            const respect = performance.reduce((sum, row) => sum + Number(row.respect || 0), 0);
+
+            state.warHistory[id] = {
+                ...updated,
+                attacksTracked: attacks.length,
+                scoringHits,
+                respect,
+                participants,
+                performance: performance.map(compactPerformanceRow),
+                finalReconciledAt: nowSec(),
+                finalized: true,
+                finalReconcileError: '',
+                updatedAt: Date.now(),
+            };
+            await Store.set('warHistory', state.warHistory);
+
+            if (String(state.warAttackCache?.warId || '') === id || (!currentWarId() && payoutWarOptions()[0]?.warId && String(payoutWarOptions()[0].warId) === id)) {
+                state.warAttackCache = {
+                    warId: id,
+                    opponentId: Number(updated.opponentId || 0),
+                    updatedAt: Date.now(),
+                    attacks: attacks.slice(0, 3000),
+                };
+                await Store.set('warAttackCache', state.warAttackCache);
+            }
+
+            if (!silent) toast(`Final war data refreshed: ${scoringHits} scoring hits from ${attacks.length} attacks`, 'ok');
+            return true;
+        } catch (err) {
+            const message = err?.message || String(err);
+            state.warReconcileError = message;
+            if (state.warHistory?.[id]) {
+                state.warHistory[id] = {
+                    ...state.warHistory[id],
+                    finalReconcileError: message,
+                    finalReconcileAttemptAt: Date.now(),
+                    updatedAt: Date.now(),
+                };
+                await Store.set('warHistory', state.warHistory);
+            }
+            console.warn('[TFC] historical war reconciliation failed', err);
+            if (!silent) toast(`Final refresh failed: ${message}`, 'error');
+            return false;
+        } finally {
+            state.warReconcileId = null;
+            if (state.open && state.activeTab === 'payout') render();
+        }
     }
 
     async function syncWarAttacks(force = false, fullHistory = false) {
@@ -2836,25 +3021,38 @@
         const totalAssists = performanceRows.reduce((s,r)=>s+Number(r.assists||0),0);
         const totalRespect = performanceRows.reduce((s,r)=>s+Number(r.respect||0),0);
         const participants = performanceRows.length;
-        const currentBadge = String(warId) === currentWarId() ? '<span class="tfc-report-badge good">CURRENT</span>' : '<span class="tfc-report-badge">SAVED</span>';
+        const isCurrent = String(warId) === currentWarId();
+        const isReconciling = String(state.warReconcileId || '') === String(warId);
+        const currentBadge = isCurrent
+            ? '<span class="tfc-report-badge good">CURRENT</span>'
+            : summary.finalReconciledAt
+                ? '<span class="tfc-report-badge good">FINAL</span>'
+                : '<span class="tfc-report-badge">SAVED</span>';
+        const reconciliationText = summary.finalReconciledAt
+            ? ` · final data ${fmtDateTime(summary.finalReconciledAt)}`
+            : (!isCurrent ? ' · saved snapshot, refresh for final data' : '');
         return `
             <div class="tfc-section">
                 <div class="tfc-section-head">
-                    <div><div class="tfc-kicker">War Performance + Payouts</div><h3 style="margin-top:4px">${escapeHtml(summary.opponentName || 'Ranked war')} ${currentBadge}</h3><span class="tfc-muted" style="font-size:10px">War #${escapeHtml(warId)} · payout drafts stay local to this device</span></div>
+                    <div><div class="tfc-kicker">War Performance + Payouts</div><h3 style="margin-top:4px">${escapeHtml(summary.opponentName || 'Ranked war')} ${currentBadge}</h3><span class="tfc-muted" style="font-size:10px">War #${escapeHtml(warId)} · payout drafts stay local to this device${escapeHtml(reconciliationText)}</span></div>
                     <div class="tfc-toolbar">
                         <select class="tfc-select" data-role="payout-war">${options.map(w => `<option value="${escapeHtml(w.warId)}" ${String(w.warId)===String(warId)?'selected':''}>#${escapeHtml(w.warId)} · ${escapeHtml(w.opponentName || 'Unknown')}</option>`).join('')}</select>
-                        ${String(warId)===currentWarId()?`<button class="tfc-btn" data-action="sync-war-attacks" ${state.warAttackSyncing?'disabled':''}>${state.warAttackSyncing?'Syncing…':'Sync attacks'}</button>`:''}
+                        ${isCurrent
+                            ? `<button class="tfc-btn" data-action="sync-war-attacks" ${state.warAttackSyncing?'disabled':''}>${state.warAttackSyncing?'Syncing…':'Sync attacks'}</button>`
+                            : `<button class="tfc-btn primary" data-action="refresh-final-war" data-war-id="${escapeHtml(warId)}" ${isReconciling?'disabled':''}>${isReconciling?'Refreshing final data…':'Refresh final data'}</button>`}
                     </div>
                 </div>
                 <div class="tfc-grid">
                     ${statCard('Participants', fmtNumber(participants), `${fmtNumber(totalAttempts)} attempts`)}
-                    ${statCard('Scoring hits', fmtNumber(totalHits), `${fmtNumber(totalAssists)} assists`)}
+                    ${statCard('Scoring hits', fmtNumber(totalHits), `${fmtNumber(totalAssists)} assists${Number(summary.officialSuccessfulAttacks||0)?` · official ${fmtNumber(summary.officialSuccessfulAttacks)}`:''}`)}
                     ${statCard('Respect', fmtRate(totalRespect,2), 'tracked scoring respect')}
                     ${statCard('Our score', fmtNumber(summary.ourScore ?? 0), `target ${fmtNumber(summary.target ?? 0)}`)}
                     ${statCard('Opponent score', fmtNumber(summary.enemyScore ?? 0), escapeHtml(summary.opponentName || ''))}
                     ${statCard('Attack data', state.warAttackAccess==='ok'||summary.attacksTracked? 'Available':'Locked', summary.attacksTracked?`${fmtNumber(summary.attacksTracked)} stored attacks`:state.warAttackAccessType||'permission dependent')}
+                    ${statCard('Final data', summary.finalReconciledAt?'FINALIZED':isCurrent?'LIVE':'SNAPSHOT', summary.finalReconciledAt?`Reconciled ${fmtDateTime(summary.finalReconciledAt)}`:isCurrent?'updates with live sync':'Use Refresh final data')}
                 </div>
             </div>
+            ${!isCurrent && summary.finalReconcileError && (!summary.finalReconciledAt || Number(summary.finalReconcileAttemptAt||0) > Number(summary.finalReconciledAt||0)*1000) ? `<div class="tfc-intel-lock"><strong class="tfc-warn">Last final refresh did not complete.</strong><br>${escapeHtml(summary.finalReconcileError)}${summary.finalReconciledAt?'<br><span class="tfc-muted">The previous finalized data has been kept.</span>':''}</div>` : ''}
             ${lockedCurrent?`<div class="tfc-intel-lock"><strong class="tfc-warn">Exact performance needs faction attack-log access.</strong><br>${escapeHtml(state.warAttackError || 'Use a Limited/Full key with Faction API Access, or a Custom key containing faction attacks.')}</div>`:''}
             <div class="tfc-section">
                 <div class="tfc-section-head"><div><h3>Performance report</h3><span class="tfc-muted" style="font-size:10px">Raw participation stays separate from payout rules.</span></div></div>
@@ -3292,6 +3490,19 @@
                 state.enemyRoster = [];
                 // Keep the latest bounded attack cache/report available for post-war payout work.
                 if (state.warAttackCache?.warId && Array.isArray(state.warAttackCache.attacks)) state.warAttacks = state.warAttackCache.attacks;
+            }
+
+            // When Torn stops reporting the previous war as current, schedule one final authoritative reconciliation.
+            const activeWarId = currentWarId();
+            if (previousWarId && previousWarId !== activeWarId) {
+                const saved = state.warHistory?.[previousWarId];
+                const lastAttempt = Number(saved?.finalReconcileAttemptAt || 0);
+                const due = !saved?.finalReconciledAt && (!lastAttempt || Date.now() - lastAttempt > 60 * 60 * 1000);
+                if (saved && due) {
+                    state.warHistory[previousWarId] = { ...saved, finalReconcileAttemptAt: Date.now() };
+                    await Store.set('warHistory', state.warHistory);
+                    setTimeout(() => reconcileSavedWar(previousWarId, true), 500);
+                }
             }
             state.warLastFetchedAt = Date.now();
             if (force && !silent) toast(war ? `War Command updated: ${state.enemyRoster.length} enemy members` : 'No current ranked war found');
@@ -5571,6 +5782,13 @@
                 await updateWarHistorySummary();
                 if (state.warAttackAccess === 'ok') toast(`Tracked ${state.warAttacks.length} war attacks`);
                 else toast(state.warAttackError || 'Attack tracking is not available with this key', 'error');
+                return render();
+            }
+            if (action === 'refresh-final-war') {
+                const id = el.dataset.warId || selectedPayoutWarId();
+                if (!id) return;
+                state.payoutWarId = String(id);
+                await reconcileSavedWar(id, false);
                 return render();
             }
             if (action === 'sync-intel') return syncMemberIntel();
