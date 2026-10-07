@@ -23,9 +23,13 @@ Keeping the filename stable means TornPDA can continue updating from the same so
 
 ## Current version
 
-**v0.15.2**
+**v0.15.3**
 
 TFC also includes an update panel in **Settings → GitHub auto-update** where you can check the latest repository version manually.
+
+## Completed-war payout refresh
+
+In **Payouts**, completed Ranked Wars can be reconciled with **Refresh final data**. TFC re-fetches the final war window and attack history while preserving your payout settings and manual adjustments.
 
 ## Main modules
 
