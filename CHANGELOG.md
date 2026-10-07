@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.3
+
+- Added **Refresh final data** for completed Ranked Wars in Payouts.
+- Final refresh uses Torn's completed Ranked War report for authoritative start/end timestamps and final scores, then re-fetches the full outgoing Ranked War attack window.
+- Rebuilds attempts, scoring hits, assists, losses, respect, Fair Fight averages, maximum chain position, last-hit data, participants, and per-target hit counts.
+- Preserves payout configuration, gross war value, exclusions, manual bonuses/deductions, notes, and paid/unpaid state.
+- Completed wars show **FINAL** and the last reconciliation time.
+- TFC automatically attempts one final reconciliation when it detects that a live Ranked War has ended.
+- Failed refreshes preserve the previous finalized data.
+- Includes the existing v0.15.2 narrow-panel Command Center layout fix.
+
 ## 0.15.2
 
 - Fixed the leadership overview banner reserving 520 pixels of height when the Command Center switches to a column layout on phones or narrow panels. The banner now sizes to its content while keeping the refresh control and status guide visible.
