@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tideborn Faction Command
 // @namespace    tideborn.legion
-// @version      0.15.2
+// @version      0.15.3
 // @description  Modular faction leadership command center for Torn with member management, war, chain, OC, recruitment, armory, finance, analytics, and GitHub auto-updates.
 // @author       Leviath4n / Tideborn Legion
 // @homepageURL  https://github.com/Leviath4n-work/tideborn-faction-command
