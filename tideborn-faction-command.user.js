@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tideborn Faction Command
 // @namespace    tideborn.legion
-// @version      0.15.3
+// @version      0.15.4
 // @description  Modular faction leadership command center for Torn with member management, war, chain, OC, recruitment, armory, finance, analytics, and GitHub auto-updates.
 // @author       Leviath4n / Tideborn Legion
 // @homepageURL  https://github.com/Leviath4n-work/tideborn-faction-command
@@ -26,7 +26,7 @@
         id: 'tideborn-faction-command',
         name: 'Tideborn Faction Command',
         short: 'TFC',
-        version: '0.15.3',
+        version: '0.15.4',
         apiBase: 'https://api.torn.com/v2',
         apiComment: 'TidebornFC',
         storagePrefix: 'tfc:',
@@ -564,7 +564,7 @@
                 overflow: hidden;
                 box-shadow: 0 28px 90px rgba(0,0,0,.6);
                 display: grid;
-                grid-template-rows: auto auto minmax(0, 1fr);
+                grid-template-rows: auto auto auto minmax(0, 1fr);
                 font-family: Arial, Helvetica, sans-serif;
             }
             .tfc-header {
@@ -606,7 +606,7 @@
             }
             .tfc-tab.active { color: #fff; background: #24313e; }
             .tfc-tab.disabled { opacity: .35; cursor: default; }
-            .tfc-content { min-height: 0; overflow: auto; padding: 14px; }
+            .tfc-content { grid-row: 4; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; scroll-behavior: auto; padding: 14px; }
             .tfc-empty {
                 min-height: 260px; display: grid; place-items: center; text-align: center; color: var(--tfc-muted); padding: 30px;
             }
@@ -1336,6 +1336,7 @@
     }
 
     function closePanel() {
+        capturePanelView($('#tfc-panel'));
         state.open = false;
         $('#tfc-overlay')?.classList.remove('open');
     }
@@ -1358,10 +1359,114 @@
         return TAB_META[state.activeTab] || { label: String(state.activeTab || 'Command'), short: 'TFC' };
     }
 
+    // Ephemeral UI state: never write focus, drafts or scroll offsets to faction storage.
+    const panelViews = new Map();
+    const wheelPanels = new WeakSet();
+
+    function viewKey(el, root) {
+        const parts = [];
+        for (let node = el; node && node !== root; node = node.parentElement) {
+            const attrs = Array.from(node.attributes).filter(a => a.name === 'id' || a.name === 'name' || a.name.startsWith('data-'));
+            parts.unshift(attrs.length
+                ? `${node.tagName}:${JSON.stringify(attrs.map(a => [a.name, a.value]))}`
+                : `${node.tagName}:${Array.prototype.indexOf.call(node.parentElement.children, node)}`);
+        }
+        return parts.join('/');
+    }
+
+    function capturePanelView(panel) {
+        const content = panel?.querySelector('.tfc-content');
+        const tab = panel?.dataset.renderedTab;
+        // Hidden elements report zero offsets; closePanel saves before hiding instead.
+        if (!content || !tab || !panel.getClientRects().length) return null;
+        const focus = document.activeElement;
+        const controls = Array.from(panel.querySelectorAll('input, textarea, select, button, a[href]'));
+        const focused = controls.includes(focus) ? {
+            key: viewKey(focus, panel),
+            value: focus.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea') ? focus.value : undefined,
+            start: focus.selectionStart, end: focus.selectionEnd, direction: focus.selectionDirection,
+        } : null;
+        const view = {
+            top: content.scrollTop, left: content.scrollLeft,
+            nested: Array.from(content.querySelectorAll('*'))
+                .filter(el => el.scrollTop || el.scrollLeft)
+                .map(el => ({ key: viewKey(el, content), top: el.scrollTop, left: el.scrollLeft })),
+            focused,
+        };
+        panelViews.set(tab, view);
+        return view;
+    }
+
+    function restorePanelView(panel, view, restoreFocus) {
+        if (!view) return;
+        const content = panel.querySelector('.tfc-content');
+        // Restore focus synchronously, before scroll, so no delayed callback can undo a user gesture.
+        if (restoreFocus && view.focused) {
+            const el = Array.from(panel.querySelectorAll('input, textarea, select, button, a[href]'))
+                .find(node => viewKey(node, panel) === view.focused.key);
+            if (el && !el.disabled) {
+                if (view.focused.value !== undefined) el.value = view.focused.value;
+                el.focus({ preventScroll: true });
+                if (typeof view.focused.start === 'number' && typeof el.setSelectionRange === 'function') {
+                    el.setSelectionRange(view.focused.start, view.focused.end, view.focused.direction || 'none');
+                }
+            }
+        }
+        const nested = new Map(view.nested.map(item => [item.key, item]));
+        for (const el of content.querySelectorAll('*')) {
+            const saved = nested.get(viewKey(el, content));
+            if (saved) { el.scrollTop = saved.top; el.scrollLeft = saved.left; }
+        }
+        content.scrollTop = view.top;
+        content.scrollLeft = view.left;
+    }
+
+    function bindPanelWheel(panel) {
+        if (wheelPanels.has(panel)) return;
+        wheelPanels.add(panel);
+        panel.addEventListener('wheel', e => {
+            if (e.ctrlKey || e.metaKey) return; // Preserve browser/pinch zoom.
+            const content = panel.querySelector('.tfc-content');
+            if (!content) return;
+            const target = e.target instanceof Element ? e.target : content;
+            const unit = e.deltaMode === 1 ? (parseFloat(getComputedStyle(target).lineHeight) || 16)
+                : e.deltaMode === 2 ? content.clientHeight : 1;
+            let dx = e.deltaX * unit, dy = e.deltaY * unit;
+            if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+            const route = (axis, delta) => {
+                if (!delta) return;
+                const pos = axis === 'y' ? 'scrollTop' : 'scrollLeft';
+                const size = axis === 'y' ? 'scrollHeight' : 'scrollWidth';
+                const client = axis === 'y' ? 'clientHeight' : 'clientWidth';
+                for (let el = target; el && el !== panel; el = el.parentElement) {
+                    const overflow = getComputedStyle(el)[axis === 'y' ? 'overflowY' : 'overflowX'];
+                    const max = el[size] - el[client];
+                    if (/^(auto|scroll)$/.test(overflow) && max > 0 && (delta < 0 ? el[pos] > 0 : el[pos] < max)) {
+                        el[pos] += delta;
+                        return;
+                    }
+                }
+                // Header/blank-area gestures and exhausted nested tables route to the main viewport.
+                content[pos] += delta;
+            };
+            route('x', dx);
+            route('y', dy);
+            if (dx || dy) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, { capture: true, passive: false });
+    }
+
     function render() {
         if (!state.open) return;
         const panel = $('#tfc-panel');
         if (!panel) return;
+        const previousTab = panel.dataset.renderedTab;
+        capturePanelView(panel);
+        const view = panelViews.get(state.activeTab);
+        const tabsLeft = panel.querySelector('.tfc-tabs')?.scrollLeft || 0;
+        bindPanelWheel(panel);
         panel.style.setProperty('--tfc-panel-width', `${Number(state.config.panelWidth) || 1180}px`);
         panel.innerHTML = `
             <div class="tfc-header">
@@ -1398,6 +1503,9 @@
             <div class="tfc-content">${renderActiveTab()}</div>
         `;
         bindUiEvents(panel);
+        panel.dataset.renderedTab = state.activeTab;
+        panel.querySelector('.tfc-tabs').scrollLeft = tabsLeft;
+        restorePanelView(panel, view, previousTab === state.activeTab);
     }
 
     function tabButton(key, label, disabled = false) {
@@ -5844,8 +5952,6 @@
         if (search) search.addEventListener('input', e => {
             state.search = e.target.value;
             render();
-            const input = $('[data-role="member-search"]', $('#tfc-panel'));
-            if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         });
 
         const filter = $('[data-role="status-filter"]', panel);
@@ -5876,8 +5982,6 @@
         if (warSearch) warSearch.addEventListener('input', e => {
             state.warSearch = e.target.value;
             render();
-            const input = $('[data-role="war-search"]', $('#tfc-panel'));
-            if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         });
 
         const warFilter = $('[data-role="war-filter"]', panel);
@@ -5923,8 +6027,6 @@
         if (recruitSearch) recruitSearch.addEventListener('input', e => {
             state.recruitSearch = e.target.value;
             render();
-            const input = $('[data-role="recruit-search"]', $('#tfc-panel'));
-            if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         });
         const recruitFilter = $('[data-role="recruit-filter"]', panel);
         if (recruitFilter) recruitFilter.addEventListener('change', e => { state.recruitFilter = e.target.value; render(); });
@@ -5949,15 +6051,12 @@
         const financeSearch = $('[data-role="finance-search"]', panel);
         if (financeSearch) financeSearch.addEventListener('input', e => {
             state.financeSearch=e.target.value; render();
-            const input=$('[data-role="finance-search"]',$('#tfc-panel')); if(input){input.focus();input.setSelectionRange(input.value.length,input.value.length);}
         });
         $$('[data-finance-delete]', panel).forEach(el => el.addEventListener('click', () => deleteFinanceManualEntry(el.dataset.financeDelete)));
 
         const armorySearch = $('[data-role="armory-search"]', panel);
         if (armorySearch) armorySearch.addEventListener('input', e => {
             state.armorySearch = e.target.value; render();
-            const input = $('[data-role="armory-search"]', $('#tfc-panel'));
-            if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
         });
         const armoryCategory = $('[data-role="armory-category"]', panel);
         if (armoryCategory) armoryCategory.addEventListener('change', e => { state.armoryCategory=e.target.value; render(); });

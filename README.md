@@ -1,5 +1,9 @@
 # Tideborn Faction Command
 
+> **Local v0.15.4 test build. GitHub has not been updated.** Extract the ZIP and import `tideborn-faction-command.user.js` into your existing userscript manager, replacing the installed TFC script. Keep its existing identity and local storage to retain faction data and payout drafts. The stable URLs below still serve the GitHub build; use the extracted file to test v0.15.4.
+
+This build fixes panel wheel/trackpad scrolling and preserves per-tab scrolling, nested table offsets, and active search/filter focus and caret across full renders. Positions last for this page session. Shorter filtered results clamp to their available height. Existing update metadata remains for future releases. See `LOCAL-TEST-REPORT.md`.
+
 Tideborn Faction Command (TFC) is an all-in-one Torn faction leadership userscript built for faction management, war operations, chains, Organized Crimes, recruitment, armory/vault tracking, finance, analytics, and member leadership records.
 
 ## Install
@@ -23,7 +27,7 @@ Keeping the filename stable means TornPDA can continue updating from the same so
 
 ## Current version
 
-**v0.15.3**
+**v0.15.4**
 
 TFC also includes an update panel in **Settings → GitHub auto-update** where you can check the latest repository version manually.
 

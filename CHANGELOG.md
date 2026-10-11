@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.4
+
+- Route mouse-wheel and trackpad gestures across panel content and nested tables. Keep horizontal gestures, Shift-wheel and browser/pinch zoom.
+- Preserve per-tab main/nested scroll offsets across refresh, search, filter, full render, API and auto-refresh paths.
+- Restore active control focus without scrolling; retain text drafts, caret and selection. Remove five search handlers that forced the caret to the end.
+- Reserve the mobile quick-action row so the content remains a bounded scrolling viewport.
+- Retain v0.15.2 layout and v0.15.3 final-war/payout fixes.
+
 ## 0.15.3
 
 - Added **Refresh final data** for completed Ranked Wars in Payouts.
